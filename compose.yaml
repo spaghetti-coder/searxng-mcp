@@ -1,0 +1,23 @@
+---
+services:
+  searxng-mcp:
+    image: ghcr.io/spaghetti-coder/searxng-mcp:latest
+    # build: .  # <- Uncomment for local builds
+    container_name: searxng-mcp
+    restart: unless-stopped
+    ports:
+      - 3000:3000
+    environment:
+      # ~~ REQUIRED ~~
+      # Comma-separated list of SearXNG URLs (single or multiple)
+      - SEARXNG_URLS=http://searxng:8888
+      # ~~ OPTIONAL ~~
+      - PORT=3000
+      # In milliseconds
+      - QUEUE_DELAY_MIN=4000
+      - QUEUE_DELAY_MAX=8000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

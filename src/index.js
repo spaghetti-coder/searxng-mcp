@@ -1,0 +1,211 @@
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { z } from 'zod';
+
+// ─── Queue ────────────────────────────────────────────────────────────────────
+
+class SearchQueue {
+  #queue = [];
+  #running = false;
+  #nextAllowedAt = 0;
+  #delayMin;
+  #delayMax;
+
+  constructor(delayMin, delayMax) {
+    this.#delayMin = delayMin;
+    this.#delayMax = delayMax;
+  }
+
+  static #delay(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  static #randomMs(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  enqueue(fn) {
+    return new Promise((resolve, reject) => {
+      this.#queue.push({ fn, resolve, reject });
+      if (!this.#running) this.#drain();
+    });
+  }
+
+  async #drain() {
+    this.#running = true;
+    while (this.#queue.length > 0) {
+      const wait = this.#nextAllowedAt - Date.now();
+      if (wait > 0) await SearchQueue.#delay(wait);
+
+      const task = this.#queue.shift();
+      try {
+        task.resolve(await task.fn());
+      } catch (e) {
+        task.reject(e);
+      }
+      this.#nextAllowedAt = Date.now() + SearchQueue.#randomMs(this.#delayMin, this.#delayMax);
+    }
+    this.#running = false;
+  }
+}
+
+// ─── Server pool ──────────────────────────────────────────────────────────────
+
+function createServerPool(urls, delayMin, delayMax) {
+  const servers = urls.map((url) => ({ url, queue: new SearchQueue(delayMin, delayMax) }));
+  let rrIndex = 0;
+
+  return {
+    servers,
+    nextIndex() {
+      const index = rrIndex;
+      rrIndex = (rrIndex + 1) % servers.length;
+      return index;
+    },
+  };
+}
+
+// ─── SearXNG client ───────────────────────────────────────────────────────────
+
+function formatResults(data, pageno) {
+  const out = { pageno };
+
+  if (data.answers?.length) {
+    out.answers = data.answers.map(({ answer, url }) => ({ answer, url }));
+  }
+
+  if (data.infoboxes?.length) {
+    out.knowledge_panels = data.infoboxes.map(({ infobox, content, urls, attributes }) => ({
+      infobox,
+      content,
+      urls: urls?.map(({ title, url }) => ({ title, url })),
+      attributes: attributes?.map(({ label, value }) => ({ label, value })),
+    }));
+  }
+
+  out.results = data.results.map(({ title, url, content, publishedDate, engines, score }) => ({
+    title,
+    url,
+    content,
+    ...(publishedDate && { publishedDate }),
+    found_by_engines: engines,
+    relevance_score: score,
+  }));
+
+  if (data.suggestions?.length) {
+    out.suggestions = data.suggestions;
+  }
+
+  return out;
+}
+
+async function fetchSearch(serverUrl, query, pageno) {
+  const url = new URL('/search', serverUrl);
+  url.searchParams.set('q', query);
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('pageno', String(pageno));
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 10_000);
+  try {
+    const res = await fetch(url, { signal: abort.signal });
+    if (!res.ok) throw new Error(`SearXNG ${res.status}: ${res.statusText}`);
+    return formatResults(await res.json(), pageno);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchWithFallback(pool, query, pageno) {
+  const startIndex = pool.nextIndex();
+
+  for (let i = 0; i < pool.servers.length; i++) {
+    const server = pool.servers[(startIndex + i) % pool.servers.length];
+    try {
+      const result = await server.queue.enqueue(() => fetchSearch(server.url, query, pageno));
+      if (result.results?.length > 0) return result;
+    } catch (err) {
+      console.error(`[searxng-mcp] ${server.url} failed: ${err.message}`);
+    }
+  }
+
+  throw new Error('All SearXNG servers failed or returned empty results');
+}
+
+// ─── MCP server ───────────────────────────────────────────────────────────────
+
+function createServer(pool) {
+  const server = new McpServer({
+    name: 'searxng-mcp',
+    version: '1.0.0',
+    instructions:
+      'Use the search tool to find up-to-date information on the web. ' +
+      'Prefer concise queries. Use pageno to paginate through results when the first page is insufficient.',
+  });
+
+  server.registerTool(
+    'search',
+    {
+      description:
+        'Search the web via SearXNG. Returns results with title, url, content snippet, ' +
+        'relevance score, and which engines found it. May also include direct answers, ' +
+        'knowledge panels, and query suggestions. Use pageno to fetch additional pages.',
+      inputSchema: {
+        query: z.string().describe('Search query'),
+        pageno: z.number().int().min(1).default(1).describe('Page number (default: 1)'),
+      },
+    },
+    async ({ query, pageno }) => {
+      try {
+        const result = await fetchWithFallback(pool, query, pageno);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+      }
+    },
+  );
+
+  return server;
+}
+
+// ─── Bootstrap ────────────────────────────────────────────────────────────────
+
+const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX } = z
+  .object({
+    PORT: z.coerce.number().default(3000),
+    SEARXNG_URLS: z
+      .string({ required_error: 'SEARXNG_URLS must be set' })
+      .transform((s) => s.split(',').map((u) => u.trim()).filter(Boolean)),
+    QUEUE_DELAY_MIN: z.coerce.number().default(4000),
+    QUEUE_DELAY_MAX: z.coerce.number().default(8000),
+  })
+  .parse(process.env);
+
+const pool = createServerPool(SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX);
+
+const app = createMcpExpressApp();
+
+app.post('/mcp', async (req, res) => {
+  const server = createServer(pool);
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  res.on('close', () => {
+    transport.close();
+    server.close();
+  });
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+});
+
+for (const method of ['get', 'delete']) {
+  app[method]('/mcp', (_req, res) => res.status(405).end());
+}
+
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+const httpServer = app.listen(PORT, () => {
+  console.log(`searxng-mcp on :${PORT} → ${pool.servers.map((s) => s.url).join(', ')}`);
+});
+
+const shutdown = () => httpServer.close(() => process.exit(0));
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

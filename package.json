@@ -1,0 +1,27 @@
+{
+  "name": "searxng-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for web search via SearXNG",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "lint": "eslint src/index.js",
+    "format": "prettier --write src/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^4.19.0",
+    "zod": "^3.23.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "prettier": "^3.2.0"
+  }
+}
