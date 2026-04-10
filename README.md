@@ -57,6 +57,19 @@ The server listens on `POST /mcp` (Streamable HTTP transport).
   }
 }
 ```
+
+`~/.claude/settings.json` (to avoid asking permission)
+
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "mcp__searxng__*"
+    ]
+  }
+}
+```
 </details>
 
 <details><summary>OpenCode</summary>
