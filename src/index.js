@@ -170,20 +170,24 @@ function createServer(pool) {
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX } = z
+const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX, ALLOWED_HOSTS } = z
   .object({
     PORT: z.coerce.number().default(3000),
     SEARXNG_URLS: z
       .string({ required_error: 'SEARXNG_URLS must be set' })
       .transform((s) => s.split(',').map((u) => u.trim()).filter(Boolean)),
-    QUEUE_DELAY_MIN: z.coerce.number().default(4000),
-    QUEUE_DELAY_MAX: z.coerce.number().default(8000),
+    QUEUE_DELAY_MIN: z.coerce.number().default(3000),
+    QUEUE_DELAY_MAX: z.coerce.number().default(7000),
+    ALLOWED_HOSTS: z
+      .string()
+      .default('0.0.0.0')
+      .transform((s) => (s === '0.0.0.0' ? undefined : s.split(',').map((h) => h.trim()).filter(Boolean))),
   })
   .parse(process.env);
 
 const pool = createServerPool(SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX);
 
-const app = createMcpExpressApp();
+const app = createMcpExpressApp({ host: '0.0.0.0', allowedHosts: ALLOWED_HOSTS });
 
 app.post('/mcp', async (req, res) => {
   const server = createServer(pool);

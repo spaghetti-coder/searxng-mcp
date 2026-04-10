@@ -13,6 +13,7 @@ services:
       - SEARXNG_URLS=http://searxng:8888
       # ~~ OPTIONAL ~~
       - PORT=3000
+      - ALLOWED_HOSTS=0.0.0.0
       # In milliseconds
       - QUEUE_DELAY_MIN=4000
       - QUEUE_DELAY_MAX=8000
