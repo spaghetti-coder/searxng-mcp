@@ -1,6 +1,6 @@
 # searxng-mcp
 
-MCP server for web search via SearXNG. Exposes a `search` tool over Streamable HTTP transport, with a built-in queue that adds random 3–7 s delays between requests to avoid rate limiting.
+MCP server for web search via SearXNG. Exposes a `search` tool over Streamable HTTP transport, with a built-in queue that adds random 5–9 s delays between requests to avoid rate limiting from the upstream search engines.
 
 ## Requirements
 
@@ -9,7 +9,7 @@ MCP server for web search via SearXNG. Exposes a `search` tool over Streamable H
 
 ## Configuration
 
-Create a `.env` file (see `.env.example`):
+Create a `.env` file (see `compose.yaml` for supported configuration):
 
 ```env
 # Single server
@@ -21,25 +21,23 @@ SEARXNG_URLS=http://your-searxng:8888
 PORT=3000
 ```
 
-## Run locally
+## Run
+
+<details><summary>Locally</summary>
 
 ```bash
 npm install
 npm start
 ```
+</details>
 
-## Run with Docker
+<details><summary>Docker</summary>
 
 ```bash
-# Create shared network (once)
-docker network create searxng-net
-
-cp .env.example .env
-# edit .env
-
 docker compose up -d
 docker logs searxng-mcp
 ```
+</details>
 
 ## Connect an MCP client
 
@@ -47,7 +45,7 @@ The server listens on `POST /mcp` (Streamable HTTP transport).
 
 <details><summary>Claude Code / Claude Desktop</summary>
 
-`~/.claude/claude_desktop_config.json`
+`~/.claude.json`
 
 ```json
 {
@@ -61,7 +59,7 @@ The server listens on `POST /mcp` (Streamable HTTP transport).
 ```
 </details>
 
-<details><summary>opencode</summary>
+<details><summary>OpenCode</summary>
 
 `~/.config/opencode/opencode.json`
 
@@ -77,7 +75,28 @@ The server listens on `POST /mcp` (Streamable HTTP transport).
 ```
 </details>
 
-## Testing with curl
+<details><summary>OpenClaw</summary>
+
+`~/.openclaw/openclaw.json`
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "searxng": {
+        "url": "http://localhost:3000/mcp",
+        "transport": "streamable-http"
+      }
+    }
+  }
+}
+```
+</details>
+
+## Testing
+
+
+<details><summary>with curl</summary>
 
 ```bash
 # Health check
@@ -101,6 +120,7 @@ curl -X POST http://localhost:3000/mcp \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search","arguments":{"query":"hello world","pageno":2}}}'
 ```
+</details>
 
 ## Tool
 

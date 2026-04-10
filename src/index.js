@@ -27,6 +27,8 @@ class SearchQueue {
 
   enqueue(fn) {
     return new Promise((resolve, reject) => {
+      const depth = this.#queue.length;
+      console.log(`[queue] enqueued${depth > 0 ? `, ${depth + 1} waiting` : ''}`);
       this.#queue.push({ fn, resolve, reject });
       if (!this.#running) this.#drain();
     });
@@ -36,7 +38,10 @@ class SearchQueue {
     this.#running = true;
     while (this.#queue.length > 0) {
       const wait = this.#nextAllowedAt - Date.now();
-      if (wait > 0) await SearchQueue.#delay(wait);
+      if (wait > 0) {
+        console.log(`[queue] rate-limit delay: ${(wait / 1000).toFixed(1)}s`);
+        await SearchQueue.#delay(wait);
+      }
 
       const task = this.#queue.shift();
       try {
@@ -106,11 +111,19 @@ async function fetchSearch(serverUrl, query, pageno) {
   url.searchParams.set('format', 'json');
   url.searchParams.set('pageno', String(pageno));
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), 10_000);
+  const timer = setTimeout(() => {
+    console.warn(`[searxng] (${serverUrl}) timeout: "${query}"`);
+    abort.abort();
+  }, 10_000);
+  const t0 = Date.now();
   try {
     const res = await fetch(url, { signal: abort.signal });
     if (!res.ok) throw new Error(`SearXNG ${res.status}: ${res.statusText}`);
-    return formatResults(await res.json(), pageno);
+    const data = formatResults(await res.json(), pageno);
+    console.log(
+      `[searxng] (${serverUrl}) "${query}" ${data.results.length} results @ page ${pageno} in ${Date.now() - t0}ms`,
+    );
+    return data;
   } finally {
     clearTimeout(timer);
   }
@@ -121,11 +134,13 @@ async function fetchWithFallback(pool, query, pageno) {
 
   for (let i = 0; i < pool.servers.length; i++) {
     const server = pool.servers[(startIndex + i) % pool.servers.length];
+    const tryNext = i + 1 < pool.servers.length ? ', trying next' : '';
     try {
       const result = await server.queue.enqueue(() => fetchSearch(server.url, query, pageno));
       if (result.results?.length > 0) return result;
+      console.warn(`[searxng] (${server.url}) "${query}" returned 0 results${tryNext}`);
     } catch (err) {
-      console.error(`[searxng-mcp] ${server.url} failed: ${err.message}`);
+      console.error(`[searxng] (${server.url}) error: ${err.message}${tryNext}`);
     }
   }
 
@@ -173,15 +188,17 @@ function createServer(pool) {
 const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX, ALLOWED_HOSTS } = z
   .object({
     PORT: z.coerce.number().default(3000),
-    SEARXNG_URLS: z
-      .string({ required_error: 'SEARXNG_URLS must be set' })
-      .transform((s) => s.split(',').map((u) => u.trim()).filter(Boolean)),
-    QUEUE_DELAY_MIN: z.coerce.number().default(3000),
-    QUEUE_DELAY_MAX: z.coerce.number().default(7000),
-    ALLOWED_HOSTS: z
-      .string()
-      .default('0.0.0.0')
-      .transform((s) => (s === '0.0.0.0' ? undefined : s.split(',').map((h) => h.trim()).filter(Boolean))),
+    SEARXNG_URLS: z.string({ required_error: 'SEARXNG_URLS must be set' }).transform((s) =>
+      s.split(',').map((u) => u.trim()).filter(Boolean),
+    ),
+    QUEUE_DELAY_MIN: z.coerce.number().default(5000),
+    QUEUE_DELAY_MAX: z.coerce.number().default(9000),
+    ALLOWED_HOSTS: z.string().default('0.0.0.0')
+      .transform((s) =>
+        s === '0.0.0.0'
+          ? undefined
+          : s.split(',').map((h) => h.trim()).filter(Boolean),
+      ),
   })
   .parse(process.env);
 
@@ -190,6 +207,9 @@ const pool = createServerPool(SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX);
 const app = createMcpExpressApp({ host: '0.0.0.0', allowedHosts: ALLOWED_HOSTS });
 
 app.post('/mcp', async (req, res) => {
+  const method = req.body?.method ?? '?';
+  const tool = method === 'tools/call' ? `(${req.body?.params?.name ?? '?'})` : '';
+  console.log(`[mcp] ${method}${tool} from ${req.headers['x-forwarded-for'] ?? req.ip}`);
   const server = createServer(pool);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on('close', () => {
@@ -200,8 +220,8 @@ app.post('/mcp', async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-for (const method of ['get', 'delete']) {
-  app[method]('/mcp', (_req, res) => res.status(405).end());
+for (const verb of ['get', 'delete']) {
+  app[verb]('/mcp', (_req, res) => res.status(405).end());
 }
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
