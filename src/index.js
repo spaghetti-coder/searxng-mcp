@@ -147,6 +147,36 @@ async function fetchWithFallback(pool, query, pageno) {
   throw new Error('All SearXNG servers failed or returned empty results');
 }
 
+// ─── Output schema ────────────────────────────────────────────────────────────
+
+const SearchOutputSchema = z.object({
+  pageno: z.number(),
+  answers: z
+    .array(z.object({ answer: z.string(), url: z.string().optional() }))
+    .optional(),
+  knowledge_panels: z
+    .array(
+      z.object({
+        infobox: z.string(),
+        content: z.string().optional(),
+        urls: z.array(z.object({ title: z.string(), url: z.string() })).optional(),
+        attributes: z.array(z.object({ label: z.string(), value: z.string() })).optional(),
+      }),
+    )
+    .optional(),
+  results: z.array(
+    z.object({
+      title: z.string(),
+      url: z.string(),
+      content: z.string().optional(),
+      publishedDate: z.string().optional(),
+      found_by_engines: z.array(z.string()),
+      relevance_score: z.number().optional(),
+    }),
+  ),
+  suggestions: z.array(z.string()).optional(),
+});
+
 // ─── MCP server ───────────────────────────────────────────────────────────────
 
 function createServer(pool) {
@@ -161,6 +191,7 @@ function createServer(pool) {
   server.registerTool(
     'search',
     {
+      title: 'Web Search',
       description:
         'Search the web via SearXNG. Returns results with title, url, content snippet, ' +
         'relevance score, and which engines found it. May also include direct answers, ' +
@@ -169,11 +200,16 @@ function createServer(pool) {
         query: z.string().describe('Search query'),
         pageno: z.number().int().min(1).default(1).describe('Page number (default: 1)'),
       },
+      outputSchema: SearchOutputSchema,
+      annotations: { readOnlyHint: true },
     },
     async ({ query, pageno }) => {
       try {
         const result = await fetchWithFallback(pool, query, pageno);
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          structuredContent: result,
+        };
       } catch (err) {
         return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
       }
