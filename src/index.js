@@ -1,9 +1,10 @@
+import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
-try { process.loadEnvFile(); } catch { /* .env is optional; env vars may come from the shell or Docker */ }
+try { process.loadEnvFile(); } catch { /* .env is optional */ }
 
 // ─── Queue ────────────────────────────────────────────────────────────────────
 
@@ -112,22 +113,18 @@ async function fetchSearch(serverUrl, query, pageno) {
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
   url.searchParams.set('pageno', String(pageno));
-  const abort = new AbortController();
-  const timer = setTimeout(() => {
-    console.warn(`[searxng] (${serverUrl}) timeout: "${query}"`);
-    abort.abort();
-  }, 10_000);
   const t0 = Date.now();
   try {
-    const res = await fetch(url, { signal: abort.signal });
-    if (!res.ok) throw new Error(`SearXNG ${res.status}: ${res.statusText}`);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+    if (! res.ok) throw new Error(`SearXNG ${res.status}: ${res.statusText}`);
     const data = formatResults(await res.json(), pageno);
     console.log(
       `[searxng] (${serverUrl}) "${query}" ${data.results.length} results @ page ${pageno} in ${Date.now() - t0}ms`,
     );
     return data;
-  } finally {
-    clearTimeout(timer);
+  } catch (err) {
+    if (err.name === 'TimeoutError') console.warn(`[searxng] (${serverUrl}) timeout: "${query}"`);
+    throw err;
   }
 }
 
@@ -198,10 +195,10 @@ function createServer(pool) {
         'Search the web via SearXNG. Returns results with title, url, content snippet, ' +
         'relevance score, and which engines found it. May also include direct answers, ' +
         'knowledge panels, and query suggestions. Use pageno to fetch additional pages.',
-      inputSchema: {
+      inputSchema: z.object({
         query: z.string().describe('Search query'),
         pageno: z.number().int().min(1).default(1).describe('Page number (default: 1)'),
-      },
+      }),
       outputSchema: SearchOutputSchema,
       annotations: { readOnlyHint: true },
     },
@@ -252,7 +249,11 @@ const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX, ALLOWED_HOSTS } = 
 
 const pool = createServerPool(SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX);
 
-const app = createMcpExpressApp({ host: '0.0.0.0', allowedHosts: ALLOWED_HOSTS });
+// MCP express with fallback to express to avoid annoying warning:
+//   Server is binding to 0.0.0.0 without DNS rebinding protection ...
+const app = ALLOWED_HOSTS
+  ? createMcpExpressApp({ allowedHosts: ALLOWED_HOSTS })
+  : (() => { const a = express(); a.use(express.json()); return a; })();
 
 app.post('/mcp', async (req, res) => {
   const method = req.body?.method ?? '?';
@@ -268,7 +269,7 @@ app.post('/mcp', async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-for (const verb of ['get', 'delete']) {
+for (const verb of ['get', 'head', 'delete']) {
   app[verb]('/mcp', (_req, res) => res.status(405).end());
 }
 
@@ -278,6 +279,10 @@ const httpServer = app.listen(PORT, () => {
   console.log(`searxng-mcp on :${PORT} → ${pool.servers.map((s) => s.url).join(', ')}`);
 });
 
-const shutdown = () => httpServer.close(() => process.exit(0));
+const shutdown = () => {
+  httpServer.closeAllConnections();
+  httpServer.close(() => process.exit(0));
+};
+
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

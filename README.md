@@ -4,26 +4,14 @@ MCP server for web search via SearXNG. Exposes a `search` tool over Streamable H
 
 ## Requirements
 
-- Node.js 22+
+- Node.js 22+ or Docker engine
 - A running [SearXNG](https://github.com/searxng/searxng) instance with JSON format enabled
-
-## Configuration
-
-Create a `.env` file (see `compose.yaml` for supported configuration):
-
-```env
-# Single server
-SEARXNG_URLS=http://your-searxng:8888
-
-# Multiple servers (round-robin with per-server rate limiting)
-# SEARXNG_URLS=http://searxng1:8888,http://searxng2:8888
-
-PORT=3000
-```
 
 ## Run
 
 <details><summary>Locally</summary>
+
+Create a `.env` file (see `compose.yaml` for supported env variable) and run:
 
 ```bash
 npm install
@@ -32,6 +20,8 @@ npm start
 </details>
 
 <details><summary>Docker</summary>
+
+Modify `compose.yaml` file if required and:
 
 ```bash
 docker compose up -d
@@ -43,7 +33,7 @@ docker logs searxng-mcp
 
 The server listens on `POST /mcp` (Streamable HTTP transport).
 
-<details><summary>Claude Code / Claude Desktop</summary>
+<details><summary>Claude Code</summary>
 
 `~/.claude.json`
 
