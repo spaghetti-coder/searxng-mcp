@@ -3,6 +3,8 @@ import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
+try { process.loadEnvFile(); } catch { /* .env is optional; env vars may come from the shell or Docker */ }
+
 // ─── Queue ────────────────────────────────────────────────────────────────────
 
 class SearchQueue {
@@ -221,7 +223,7 @@ function createServer(pool) {
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 
-const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX, ALLOWED_HOSTS } = z
+const envResult = z
   .object({
     PORT: z.coerce.number().default(3000),
     SEARXNG_URLS: z.string({ required_error: 'SEARXNG_URLS must be set' }).transform((s) =>
@@ -236,7 +238,17 @@ const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX, ALLOWED_HOSTS } = 
           : s.split(',').map((h) => h.trim()).filter(Boolean),
       ),
   })
-  .parse(process.env);
+  .safeParse(process.env);
+
+if (!envResult.success) {
+  console.error('Configuration error:');
+  for (const issue of envResult.error.issues) {
+    console.error(`  ${issue.path.join('.')}: ${issue.message}`);
+  }
+  process.exit(1);
+}
+
+const { PORT, SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX, ALLOWED_HOSTS } = envResult.data;
 
 const pool = createServerPool(SEARXNG_URLS, QUEUE_DELAY_MIN, QUEUE_DELAY_MAX);
 
