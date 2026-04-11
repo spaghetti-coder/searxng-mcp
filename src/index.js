@@ -226,7 +226,7 @@ function createServer(pool) {
 const envResult = z
   .object({
     PORT: z.coerce.number().default(3000),
-    SEARXNG_URLS: z.string({ required_error: 'SEARXNG_URLS must be set' }).transform((s) =>
+    SEARXNG_URLS: z.string().transform((s) =>
       s.split(',').map((u) => u.trim()).filter(Boolean),
     ),
     QUEUE_DELAY_MIN: z.coerce.number().default(5000),
